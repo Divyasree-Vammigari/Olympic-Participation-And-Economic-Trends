@@ -1,0 +1,611 @@
+---
+title: "DV_HW9"
+author: "Ruqhaiya Fatima Syeda, Saluwa Umuhoza, Divyasree Vammigari, Garrett Ringler"
+date: "`r Sys.Date()`"
+output: html_document
+---
+# Assignment Explanation:
+The following has our graphs and statements integrating the two Activities into one group. Activity 1 items are the statements above the graphs and Activity 2 items are the updated graphs themselves and including the additional graphs that were not part of HW 7 & 8. The final graph is an animated one which should load properly but if not there are commented out lines at the bottom of that code chunk that should run and save the GIF onto your local files. 
+
+Having added up what we think are the complexity points we believe we are above the 15 minimum point requirement. Graphs 4 - 6 likely will be either condensed to just being graph 6 or split into 4 & 5 due to scaling the Y axis being difficult to fit ALL of the sports available. 
+
+## Story Approach:
+
+Our main goal is to analyze the connection between Olympic success and economic factors.  We've currently merged our Olympics dataset with a GDP dataset. We're hoping to uncover patterns in participation, performance, and representation in the Games. 
+
+Here’s what we’re curious about:
+<ul>
+  <li>Do wealthier countries consistently dominate the Olympics, or are there exceptions where lower-income nations punch above their weight?</li>
+  <li>What regional differences exist in Olympic performance, and how much can they be attributed to economic and cultural factors?</li>
+  <li>Are there specific sports where countries with fewer resources consistently excel, and what might explain this?</li>
+  <li>How has Olympic performance evolved for countries over time as their economies have grown or changed?</li>
+  <li>Which countries consistently dominate across multiple sports?</li>
+</ul>
+
+#### CODE SETUP
+```{r}
+library(dplyr)
+library(ggplot2)
+library(htmltools)
+library(plotly)
+library(treemapify)
+library(tidyr)
+library(gganimate)
+library(tibble)
+library(sf)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(scales)
+
+olympics_data <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2024/2024-08-06/olympics.csv')
+gdp_data <- readr::read_csv('https://raw.githubusercontent.com/datasets/gdp/main/data/gdp.csv')
+
+#head(gdp_data)
+merged_data <- olympics_data %>%
+  inner_join(gdp_data, by = c("year" = "Year", "noc" = "Country Code")) %>%
+    arrange(year)
+head(merged_data)
+
+# Create medal trends data for Summer and Winter seasons
+medal_trends <- olympics_data %>%
+  filter(!is.na(medal)) %>%
+  group_by(year, sport, season) %>%
+  summarise(total_medals = n(), .groups = "drop")
+
+# Separate data by season
+medal_trends_summer <- medal_trends %>%
+  filter(season == "Summer")
+
+medal_trends_winter <- medal_trends %>%
+  filter(season == "Winter")
+```
+
+
+## Key Visualizations
+
+1. Top 10 Countries by Medals Over Time
+This bar chart ranks the top 10 countries by their total Olympic medal count, with the USA leading by a substantial margin. Following the USA are former USSR, Germany, and Great Britain, showing a strong history of athletic success. The bright yellow bars highlight the dominance of these nations in Olympic history, emphasizing their consistency in winning medals over time.
+```{r}
+top_countries <- olympics_data %>%
+  filter(!is.na(medal)) %>%
+  group_by(noc) %>%
+  summarise(total_medals = n()) %>%
+  arrange(desc(total_medals)) %>%
+  slice_head(n = 10)
+
+ggplot(top_countries, aes(x = reorder(noc, total_medals), y = total_medals)) +
+  geom_bar(stat = "identity", fill = "gold") +
+  coord_flip() +
+  labs(title = "Top 10 Countries by Total Medal Count", x = "Country (NOC)", y = "Total Medals") +
+  theme_minimal()
+```
+
+2. Consistency of Top Countries Across Sports
+
+The bar chart ranks countries by the number of unique sports in which they have medaled. The USA leads, showcasing its dominance across a diverse range of sports. Germany and Great Britain follow, emphasizing their strong presence as well. This chart highlights the versatility and depth of certain nations in the Olympics. 
+```{r}
+country_sport_diversity <- olympics_data %>%
+  filter(!is.na(medal)) %>%
+  group_by(noc) %>%
+  summarise(unique_sports = n_distinct(sport)) %>%
+  arrange(desc(unique_sports)) %>%
+  slice_head(n = 10) 
+
+ggplot(country_sport_diversity, aes(x = reorder(noc, unique_sports), y = unique_sports)) +
+  geom_bar(stat = "identity", fill = "pink") +
+  coord_flip() +
+  labs(title = "Top 10 Countries by Number of Sports Medaled In", 
+       x = "Country (NOC)", 
+       y = "Number of Unique Sports") +
+  theme_minimal()
+
+```
+3. GDP vs. Medal Count by Country
+
+The scatterplot examines the relationship between GDP and total medal count by country. It reveals a positive correlation and indicates that wealthier nations, such as the USA and China, tend to dominate in terms of medal counts. The USA is an outlier with both an exceptionally high GDP and medal count, which highlights the role of economic resources in fostering athletic success.
+```{r}
+medal_gdp <- merged_data %>%
+  filter(!is.na(medal)) %>%
+  group_by(noc) %>%
+  summarise(
+    total_medals = n(),
+    avg_gdp = mean(Value, na.rm = TRUE)
+  )
+ggplot(medal_gdp, aes(x = avg_gdp, y = total_medals, label = noc)) +
+  geom_point(color = "blue") +
+  geom_text(vjust = -0.5, size = 3, check_overlap = TRUE) +
+  scale_x_log10(labels = scales::dollar_format(scale = 1e-9, suffix = "B")) + 
+  labs(
+    title = "GDP vs. Total Medal Count by Country",
+    x = "Average GDP (log scale, in billions of USD)",
+    y = "Total Medals"
+  ) +
+  theme_minimal()
+```
+
+4, 5 & 6. Medal Trends by Year and Sport for Summer Sports/Winter Sports/Combined Sports
+
+These graphs illustrate which sports tend to be more prevalent in medal counts. Here we see that Swimming, Rowing, and Athletics are the top three sports yielding medals each Olympic year while sports like Triathlon and Skeleton yield the lowest count each Olympic year. There are a couple of factors we can consider for why this may be happening. The first factor is likely the number of events within that sport that happens every Olympic year, sports like Swimming and Athletics have more events while Triathlon is a longer event that has less total events. The combined graph also helps illustrate a potential problem that the years for Winter and Summer Olympics went from being the same year prior to 1994 to being split up in 1994 and having them alternate every 2 years versus doing both every 4 years.
+
+```{r summer_graph, echo=TRUE, fig.width=14, fig.height=10, warning=FALSE, message=FALSE}
+# Adjusted Plot for Summer
+plot_summer <- ggplot(medal_trends_summer, aes(x = year, y = reorder(sport, total_medals), fill = total_medals)) +
+  geom_tile() +
+  scale_fill_gradient(low = "lightblue", high = "darkblue") +
+  labs(
+    title = "Medal Trends by Sport and Year (Summer)",
+    x = "Year",
+    y = "Sport"
+  ) +
+  theme_minimal(base_size = 15) +
+  theme(
+    axis.text.y = element_text(size = 10, hjust = 1),  # Larger y-axis text for readability
+    axis.text.x = element_text(size = 12),
+    plot.title = element_text(size = 18, face = "bold"),
+    plot.margin = margin(t = 10, r = 10, b = 10, l = 20)  # Add margin for y-axis labels
+  ) +
+  coord_cartesian(clip = "off")  # Prevent clipping of y-axis labels
+
+# Display the plot
+plot_summer
+
+# Adjusted Plot for Winter
+plot_winter <- ggplot(medal_trends_winter, aes(x = year, y = reorder(sport, total_medals), fill = total_medals)) +
+  geom_tile() +
+  scale_fill_gradient(low = "lightblue", high = "darkblue") +
+  labs(
+    title = "Medal Trends by Sport and Year (Winter)",
+    x = "Year",
+    y = "Sport"
+  ) +
+  theme_minimal(base_size = 15) +
+  theme(
+    axis.text.y = element_text(size = 10, hjust = 1),  # Larger y-axis text for readability
+    axis.text.x = element_text(size = 12),
+    plot.title = element_text(size = 18, face = "bold"),
+    plot.margin = margin(t = 10, r = 10, b = 10, l = 20)  # Add margin for y-axis labels
+  ) +
+  coord_cartesian(clip = "off")  # Prevent clipping of y-axis labels
+
+# Display the plot
+plot_winter
+
+# Combined Plot for Summer and Winter
+combined_plot <- ggplot(medal_trends, aes(x = year, y = reorder(sport, total_medals), fill = total_medals)) +
+  geom_tile() +
+  scale_fill_gradient(low = "lightblue", high = "darkblue") +
+  labs(
+    title = "Medal Trends by Sport and Year (Summer and Winter Combined)",
+    x = "Year",
+    y = "Sport",
+    fill = "Total Medals"
+  ) +
+  theme_minimal(base_size = 15) +
+  theme(
+    axis.text.y = element_text(size = 10, hjust = 1),  # Larger y-axis text for readability
+    axis.text.x = element_text(size = 12),
+    plot.title = element_text(size = 18, face = "bold"),
+    plot.margin = margin(t = 10, r = 10, b = 10, l = 20)  # Add margin for y-axis labels
+  ) +
+  coord_cartesian(clip = "off")  # Prevent clipping of y-axis labels
+
+# Display the combined plot
+combined_plot
+```
+
+
+7. Medal Dominance by Country Over Time (top 10 countries)
+This set of graphs currently showcases the constant upward and downward trends in medal gains even by the best countries. The graphs showcase the 10 countries with the most total medals. After adjusting the initial scale so that each graph has the same Y axis scale we can see how flat some of the lines are at a larger scale  while the USA and Russia/USR tend to consistently do well in medal counts. We can also see where Winter olypmics split affects the timeseries here as an option to further explore in a different project.
+
+```{r}
+medal_trends <- olympics_data %>%
+  filter(!is.na(medal)) %>%
+  group_by(year, noc) %>%
+  summarise(total_medals = n(), .groups = "drop")
+
+top_countries <- medal_trends %>%
+  group_by(noc) %>%
+  summarise(total_medals = sum(total_medals), .groups = "drop") %>%
+  arrange(desc(total_medals)) %>%
+  slice_head(n = 10)
+
+medal_trends_filtered <- medal_trends %>%
+  filter(noc %in% top_countries$noc)
+
+ggplot(medal_trends_filtered, aes(x = year, y = total_medals, color = noc)) +
+  geom_line(size = 1) +
+  facet_wrap(~noc, ncol = 2, scales = "fixed") + 
+  scale_y_continuous(breaks = c(0, 250, 500)) + 
+  labs(
+    title = "Medal Trends Over Time for Top 10 Countries",
+    x = "Year",
+    y = "Total Medals",
+    color = "Country (NOC)"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    axis.text.y = element_text(size = 10),
+    axis.text.x = element_text(size = 10),
+    plot.title = element_text(size = 18, face = "bold"),
+    axis.title = element_text(size = 14)
+  )
+```
+
+
+8. Medal Type Breakdown by Top Countries
+This graph illustrates the medal breakdowns of the top 10 most medaled countries. With this graph we can see the distribution of medals from the previous set of graphs to help continue the story of which countries tend to win by showcasing the level of win. For example, Australia is one of the countries with the highest medal count but most of those medals seem to be Silver or lower while the USA wins more golds by far.
+```{r}
+medal_type_by_country <- olympics_data %>%
+  filter(!is.na(medal)) %>%
+  group_by(noc, medal) %>%
+  summarise(total_medals = n(), .groups = "drop")
+
+top_countries <- olympics_data %>%
+  filter(!is.na(medal)) %>%
+  group_by(noc) %>%
+  summarise(total_medals = n(), .groups = "drop") %>%
+  arrange(desc(total_medals)) %>%
+  slice_head(n = 10)
+
+medal_type_filtered <- medal_type_by_country %>%
+  filter(noc %in% top_countries$noc) %>%
+  mutate(medal = factor(medal, levels = c("Bronze", "Silver", "Gold"))) # Reorder medal types
+
+ggplot(medal_type_filtered, aes(x = reorder(noc, -total_medals), y = total_medals, fill = medal)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  scale_fill_manual(values = c("Gold" = "gold", "Silver" = "grey70", "Bronze" = "sienna3")) +
+  labs(
+    title = "Medal Type Breakdown for Top 10 Countries",
+    x = "Country (NOC)",
+    y = "Number of Medals",
+    fill = "Medal Type"
+  ) +
+  theme_minimal()
+```
+
+
+
+
+9. Top Sports & Medals by Top 10 Countries with most medals.
+
+This heatmap shows the total Olympic medals won by the top 10 countries across the top 10 sports. The y-axis lists countries, while the x-axis shows sports, with darker blue tiles representing higher medal counts. The United States dominates several sports like swimming and athletics, evident from the dark blue tiles. Some sports, such as gymnastics and hockey, show more balanced distributions among countries. Blank or lighter tiles indicate fewer or no medals for a specific country sport combination.
+```{r}
+# Filter to include only top 10 countries and sports by total medals
+top_countries <- merged_data %>%
+  filter(!is.na(medal)) %>%
+  count(`Country Name`, sort = TRUE) %>%
+  slice_head(n = 10) %>%
+  pull(`Country Name`)
+
+top_sports <- merged_data %>%
+  filter(!is.na(medal)) %>%
+  count(sport, sort = TRUE) %>%
+  slice_head(n = 10) %>%
+  pull(sport)
+
+# Filter data for the heatmap
+heatmap_data <- merged_data %>%
+  filter(!is.na(medal), `Country Name` %in% top_countries, sport %in% top_sports) %>%
+  group_by(sport, `Country Name`) %>%
+  summarise(total_medals = n(), .groups = "drop")
+
+# Plot the heatmap
+ggplot(heatmap_data, aes(x = sport, y = `Country Name`, fill = total_medals)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient(low = "lightblue", high = "darkblue") +
+  labs(
+    title = "Top 10 Countries and Sports by Medal Count",
+    x = "Sport",
+    y = "Country",
+    fill = "Total Medals"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+    axis.text.y = element_text(size = 10),
+    plot.title = element_text(size = 14, face = "bold"),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 10)
+  )
+```
+
+10 & 11. Country Map by Medal Count
+
+Olympic participation by country
+The map displays Olympic participation levels by country, using a color gradient to represent the average number of participants from each country across selected years. Darker colors (purple) indicate higher participation rates, while lighter colors (yellow) show lower participation. Countries with missing data are shaded in grey. This visualization highlights geographic disparities in participation, with wealthier nations often having higher rates.
+ 
+GDP by country
+This map displays the GDP of countries around the world using a choropleth visualization. Countries are shaded based on their GDP in USD, with darker purple indicating higher GDP and lighter yellow-green showing lower GDP. Grey shading represents missing data for some countries. The color scale uses the "viridis" palette for clear distinction and accessibility.
+```{r}
+country_rename <- tibble::tibble(
+  original = c("Czech Republic", "Cote d'Ivoire", "Egypt, Arab Rep.", "Eswatini", 
+               "Hong Kong SAR, China", "Korea, Rep.", "Lao PDR", "Micronesia, Fed. Sts.", 
+               "Russian Federation", "Slovak Republic", "Syrian Arab Republic", 
+               "Turkiye", "Venezuela, RB", "Yemen, Rep.",
+               "Bosnia and Herzegovina", "Brunei Darussalam", "Central African Republic", 
+               "Congo, Dem. Rep.", "Dominican Republic", "Kyrgyz Republic", 
+               "Marshall Islands", "Sao Tome and Principe", "St. Lucia", "United States"),
+  renamed = c("Czechia", "Côte d'Ivoire", "Egypt", "eSwatini", "Hong Kong", 
+              "South Korea", "Laos", "Micronesia", "Russia", "Slovakia", 
+              "Syria", "Turkey", "Venezuela", "Yemen",
+              "Bosnia and Herz.", "Brunei", "Central African Rep.", 
+              "Dem. Rep. Congo", "Dominican Rep.", "Kyrgyzstan", 
+              "Marshall Is.", "São Tomé and Principe", "Saint Lucia", 
+              "United States of America")
+)
+
+merged_data <- merged_data %>%
+  mutate(`Country Name` = ifelse(`Country Name` %in% country_rename$original,
+                                 country_rename$renamed[match(`Country Name`, country_rename$original)],
+                                 `Country Name`))
+
+distinct_countries <- merged_data %>%
+  distinct(`Country Name`) %>%
+  arrange(`Country Name`)
+
+#print(distinct_countries)
+
+world <- ne_countries(scale = "medium", returnclass = "sf")
+
+participation_data <- merged_data %>%
+  group_by(`Country Name`, year) %>%
+  summarise(participation = n(), .groups = "drop") %>%
+  group_by(`Country Name`) %>%
+  summarise(participation = mean(participation), .groups = "drop")
+
+world_participation <- world %>%
+  left_join(participation_data, by = c("name" = "Country Name"))
+
+gdp_data_map <- merged_data %>%
+  group_by(`Country Name`, year) %>%
+  summarise(gdp = mean(Value, na.rm = TRUE), .groups = "drop") %>%
+  group_by(`Country Name`) %>%
+  summarise(gdp = mean(gdp, na.rm = TRUE), .groups = "drop")
+
+world_gdp <- world %>%
+  left_join(gdp_data_map, by = c("name" = "Country Name"))
+
+ggplot(data = world_participation) +
+  geom_sf(aes(fill = participation), color = "white") +
+  scale_fill_viridis_c(option = "viridis", direction = -1, na.value = "lightgrey", name = "Participation") +
+  labs(title = "Olympic Participation by Country", caption = "Source: TidyTuesday & GDP dataset") +
+  theme_minimal()
+
+ggplot(data = world_gdp) +
+  geom_sf(aes(fill = gdp), color = "white") +
+  scale_fill_viridis_c(option = "viridis", direction = -1, na.value = "lightgrey", 
+                       name = "GDP (in USD)", labels = label_dollar()) +
+  labs(title = "GDP by Country", caption = "Source: TidyTuesday & GDP dataset") +
+  theme_minimal()
+```
+
+
+
+
+12. Animated graph of Medals by Sports over time
+
+This animated bar graph shows the top 10 sports by total medal counts from 1960 - 2016. The dominance of specific sports can be clearly seen, like Gymnastics, Athletics, and Swimming always top the lists. In winter sports, Alpine Skiing and Cross Country Skiing emerge quite at the top, signaling their importance during the Winter Olympics. The animated nature of the graph provides insights into how the Olympics have grown and diversified across the decades.
+
+```{r}
+animation_data <- merged_data %>%
+  mutate(
+    unified_year = ifelse(year >= 1994 & season == "Winter", year - 2, year)
+  ) %>%
+  group_by(unified_year, sport) %>%
+  summarise(
+    total_medals = n(),
+    .groups = "drop"
+  ) %>%
+  complete(unified_year = seq(min(unified_year), max(unified_year), by = 4), sport, fill = list(total_medals = 0)) %>% 
+  group_by(sport) %>%
+  mutate(cumulative_medals = cumsum(total_medals)) %>%
+  ungroup() %>%
+  arrange(unified_year, desc(cumulative_medals))
+
+top_10_sports <- animation_data %>%
+  group_by(sport) %>%
+  summarise(total_medals = sum(total_medals), .groups = "drop") %>%
+  arrange(desc(total_medals)) %>%
+  slice_max(total_medals, n = 10) %>%
+  pull(sport)
+
+animation_data <- animation_data %>%
+  filter(sport %in% top_10_sports)
+
+animated_plot <- ggplot(animation_data, aes(x = reorder(sport, cumulative_medals), y = total_medals, fill = sport)) +
+  geom_bar(stat = "identity", show.legend = FALSE, width = 0.8) +
+  geom_text(aes(label = sprintf("%d", total_medals)), hjust = -0.2, size = 4) +
+  coord_flip() +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, max(animation_data$total_medals) * 1.2)) +
+  scale_fill_brewer(palette = "Set3") + 
+  labs(
+    title = 'Top 10 Sports by Total Medals: {closest_state}',
+    x = 'Sport',
+    y = 'Total Medals',
+    caption = 'Data Source: Olympic dataset'
+  ) +
+  theme_minimal(base_size = 15) +
+  theme(
+    axis.text.y = element_text(size = 10, face = "bold"),
+    axis.text.x = element_text(size = 12),
+    plot.title = element_text(size = 18, face = "bold"),
+    plot.caption = element_text(size = 10, face = "italic")
+  ) +
+  transition_states(unified_year, transition_length = 2, state_length = 1) +
+  ease_aes('sine-in-out')
+
+#animate(animated_plot, nframes = 160, fps = 10, width = 800, height = 550, renderer = gifski_renderer())
+#anim_save("top_10_sports_animated_final.gif")
+
+```
+
+
+
+
+
+
+## Cut Graphs:
+1. GDP vs. Medal Efficiency
+```{r}
+#calculating medal efficiency (medals per billion GDP)
+medal_efficiency <- merged_data %>%
+  filter(!is.na(medal)) %>%
+  group_by(noc, year) %>%
+  summarise(total_medals = n(),
+            gdp = mean(Value, na.rm = TRUE)) %>%
+  mutate(medals_per_billion_gdp = total_medals / (gdp / 1e9)) %>%
+  ungroup()
+
+#aggregating data to get mean efficiency and GDP (to avoid multiple labels for one country)
+
+country_efficiency <- medal_efficiency %>%
+  group_by(noc) %>%
+  summarise(mean_gdp = mean(gdp, na.rm = TRUE),
+            mean_medals_per_billion_gdp = mean(medals_per_billion_gdp, na.rm = TRUE))
+
+ggplot(country_efficiency, aes(x = log10(mean_gdp), y = mean_medals_per_billion_gdp, label = noc)) +
+  geom_point(color = "darkblue") +
+  geom_text(vjust = -0.5, size = 3, check_overlap = TRUE) +
+  labs(title = "Medal Efficiency by GDP (Log Scale)", 
+       x = "Log10 Mean GDP (in billions)", 
+       y = "Mean Medals per Billion GDP") +
+  theme_minimal()
+```
+
+
+
+2. Top 10 Most Efficient Countries(for better interpretability):
+```{r}
+top_efficiency <- country_efficiency %>%
+  top_n(10, mean_medals_per_billion_gdp)
+
+ggplot(top_efficiency, aes(x = log10(mean_gdp), y = mean_medals_per_billion_gdp, label = noc)) +
+  geom_point(color = "darkblue") +
+  geom_text(vjust = -0.5, size = 3) +
+  labs(title = "Top 10 Countries by Medal Efficiency", 
+       x = "Log10 Mean GDP (in billions)", 
+       y = "Mean Medals per Billion GDP") +
+  theme_minimal()
+
+```
+
+3. Olympic Participation by Gender
+```{r}
+olympic_gender <- olympics_data %>%
+  group_by(year, sex) %>%
+  summarise(participants = n())
+
+ggplot(olympic_gender, aes(x = year, y = participants, color = sex)) +
+  geom_line() +
+  labs(title = "Olympic Participation by Gender Over Time", x = "Year", y = "Participants") +
+  theme_minimal()
+```
+
+4. Medal Distribution by Sport
+```{r}
+top_sports <- olympics_data %>%
+  filter(!is.na(medal)) %>%
+  group_by(sport) %>%
+  summarise(total_medals = n()) %>%
+  arrange(desc(total_medals)) %>%
+  slice_head(n = 20)
+
+ggplot(top_sports, aes(x = reorder(sport, total_medals), y = total_medals)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Top 20 Sports by Medal Count", x = "Sport", y = "Total Medals") +
+  theme_minimal()
+
+```
+
+
+5. Demographic Data and Sport (Grouping by sport and demographic variables.)
+```{r}
+ggplot(merged_data, aes(x = sport, y = age)) +
+  geom_boxplot(fill = "skyblue", outlier.color = "red") +
+  labs(title = "Age Distribution within Each Sport",
+       x = "Sport",
+       y = "Age") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggplot(merged_data, aes(x = sport, y = height)) +
+  geom_boxplot(fill = "lightgreen", outlier.color = "purple") +
+  labs(title = "Height Distribution within Each Sport",
+       x = "Sport",
+       y = "Height") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+
+6. Country, Sport, and Medals(Data grouping by country and sport)
+
+```{r}
+# Bar chart for top sports by medal count in USA
+top_sports_usa <- merged_data %>%
+  filter(noc == "USA", !is.na(medal)) %>%
+  group_by(sport) %>%
+  summarise(total_medals = n()) %>%
+  arrange(desc(total_medals))
+
+ggplot(top_sports_usa, aes(x = reorder(sport, total_medals), y = total_medals)) +
+  geom_bar(stat = "identity", fill = "gold") +
+  coord_flip() +
+  labs(title = "Top Sports by Medal Count in USA",
+       x = "Sport",
+       y = "Total Medals")
+
+```
+
+7. Country, Year, and Medals (Data grouping by noc and year.)
+
+```{r}
+selected_countries <- merged_data %>%
+  filter(noc %in% c("USA", "CAN", "GBR", "CHN", "GER"), !is.na(medal)) %>%
+  group_by(year, noc) %>%
+  summarise(total_medals = n())
+
+ggplot(selected_countries, aes(x = year, y = total_medals, fill = noc)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  facet_wrap(~ noc) +
+  labs(title = "Medal Counts Across Years for Selected Countries",
+       x = "Year",
+       y = "Total Medals")
+
+```
+
+
+8. GDP and Medals (Merged GDP and Olympics data.)
+```{r}
+gdp_medal_data <- merged_data %>%
+  filter(!is.na(Value) & !is.na(medal)) %>%
+  group_by(noc, year) %>%
+  summarise(total_medals = n(), avg_gdp = mean(Value))
+
+ggplot(gdp_medal_data, aes(x = avg_gdp, y = total_medals, color = noc)) +
+  geom_point(size = 3, alpha = 0.7) +
+  labs(title = "GDP vs. Medal Count by Country and Year",
+       x = "Average GDP (in billions)",
+       y = "Total Medals")
+```
+
+9. GDP & Medals old scale
+```{r}
+medal_gdp <- merged_data %>%
+  filter(!is.na(medal)) %>%
+  group_by(noc) %>%
+  summarise(total_medals = n(),
+            avg_gdp = mean(Value, na.rm = TRUE))
+
+ggplot(medal_gdp, aes(x = avg_gdp, y = total_medals, label = noc)) +
+  geom_point(color = "blue") +
+  geom_text(vjust = -0.5, size = 3, check_overlap = TRUE) +
+  labs(title = "GDP vs. Total Medal Count by Country",
+       x = "Average GDP (in billions)",
+       y = "Total Medals") +
+  theme_minimal()
+```
+
+
+```
